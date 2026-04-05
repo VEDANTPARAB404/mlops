@@ -1,0 +1,139 @@
+{
+  "info": {
+    "name": "ML Predictor API",
+    "description": "Collection for testing ML Predictor endpoints",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "http://localhost:8000/health",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8000",
+          "path": ["health"]
+        }
+      }
+    },
+    {
+      "name": "Train Model",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "sk-test-12345678901234567890",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "http://localhost:8000/train",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8000",
+          "path": ["train"]
+        },
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "file",
+              "type": "file",
+              "src": "uploaded.csv"
+            },
+            {
+              "key": "target",
+              "value": "target",
+              "type": "text"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Predict",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "sk-test-12345678901234567890",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "http://localhost:8000/predict",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8000",
+          "path": ["predict"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\"data\": {\"feature1\": 1.0, \"feature2\": 2.0}}"
+        }
+      }
+    },
+    {
+      "name": "Predict - No API Key (Should fail 401)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "http://localhost:8000/predict",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8000",
+          "path": ["predict"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\"data\": {\"feature1\": 1.0, \"feature2\": 2.0}}"
+        }
+      }
+    },
+    {
+      "name": "Predict - Invalid API Key (Should fail 401)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "invalid-key",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "http://localhost:8000/predict",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8000",
+          "path": ["predict"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\"data\": {\"feature1\": 1.0, \"feature2\": 2.0}}"
+        }
+      }
+    }
+  ]
+}

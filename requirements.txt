@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+python-multipart
+pandas
+scikit-learn
+joblib
+numpy
+jinja2
+python-dotenv
+matplotlib
+seaborn
+prometheus-client

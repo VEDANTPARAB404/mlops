@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: 'ML Predictor'
+    orgId: 1
+    folder: 'ML Predictor'
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards
