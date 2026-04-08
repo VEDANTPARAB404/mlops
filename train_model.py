@@ -18,6 +18,11 @@ from exceptions import TrainingError, ValidationError
 
 
 LABEL_ENCODER_PATH = Path("label_encoder.pkl")
+ARTIFACTS_DIR = Path("/data")
+MODEL_PATH = ARTIFACTS_DIR / "model.pkl"
+FEATURES_PATH = ARTIFACTS_DIR / "features.pkl"
+LABEL_ENCODER_PATH = ARTIFACTS_DIR / "label_encoder.pkl"
+METRICS_PATH = ARTIFACTS_DIR / "metrics.pkl"
 CONFUSION_MATRIX_PATH = "static/confusion_matrix.png"
 FEATURE_IMPORTANCE_PATH = "static/feature_importance.png"
 
@@ -114,6 +119,7 @@ def train_model(file_path, target_column):
     """Train a RandomForest model on the provided dataset."""
     try:
         logger.info(f"Starting model training with file: {file_path}, target: {target_column}")
+        ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
         
         df = pd.read_csv(file_path, sep=None, engine='python')
         logger.info(f"Loaded dataset with shape: {df.shape}")
@@ -157,8 +163,9 @@ def train_model(file_path, target_column):
         _save_confusion_matrix(y_test, y_pred)
         _save_feature_importance(model, X.columns)
 
-        joblib.dump(model, "model.pkl")
-        joblib.dump(X.columns.tolist(), "features.pkl")
+        joblib.dump(model, MODEL_PATH)
+        joblib.dump(X.columns.tolist(), FEATURES_PATH)
+        joblib.dump({"accuracy": float(accuracy), "cv_mean": float(cv_mean)}, METRICS_PATH)
         logger.info("Model and features saved to pickle files")
 
         report = classification_report(y_test, y_pred)

@@ -1,0 +1,44 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: ml-predictor-rules
+  namespace: ml-predictor
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: ml-predictor.rules
+      rules:
+        - alert: MlPredictorDown
+          expr: (avg_over_time(up{job="ml-predictor"}[2m]) < 1) or absent(up{job="ml-predictor"})
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: ML Predictor target is down
+            description: Prometheus cannot scrape the ML Predictor /metrics endpoint.
+        - alert: MlPredictorHighErrorRate
+          expr: |
+            (
+              sum(rate(http_requests_total{endpoint!="/metrics",status_code=~"5.."}[5m]))
+              /
+              clamp_min(sum(rate(http_requests_total{endpoint!="/metrics"}[5m])), 1)
+            ) > 0.05
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: High 5xx error rate on ML Predictor
+            description: The app is returning too many 5xx responses over the last 5 minutes.
+        - alert: MlPredictorHighLatencyP95
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum(rate(http_request_duration_seconds_bucket{endpoint!="/metrics"}[5m])) by (le)
+            ) > 1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: High p95 request latency on ML Predictor
+            description: p95 request latency has been above 1 second for 10 minutes.

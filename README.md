@@ -278,6 +278,74 @@ The dashboard shows:
 
 ---
 
+## Kubernetes Deployment
+
+The repository includes Kubernetes manifests in `k8s/` for app deployment, service exposure, persistent model storage, and Prometheus Operator monitoring resources.
+
+### Prerequisites
+
+- A running Kubernetes cluster
+- `kubectl` configured for that cluster
+- Prometheus Operator / kube-prometheus-stack installed (for `ServiceMonitor` and `PrometheusRule` CRDs)
+- Docker image pushed to a registry reachable by your cluster (or preloaded in local cluster runtime)
+
+### 1. Build and Push Image
+
+```bash
+docker build -t <your-registry>/ml-predictor:latest .
+docker push <your-registry>/ml-predictor:latest
+```
+
+Update `k8s/deployment.yaml` image field to your published image.
+
+### 2. Configure Secret
+
+Edit `k8s/secret.yaml` and set a strong value for `API_KEYS`.
+
+### 3. Apply Manifests
+
+```bash
+kubectl apply -f k8s/namespace.yaml
+kubectl apply -f k8s/pvc.yaml
+kubectl apply -f k8s/secret.yaml
+kubectl apply -f k8s/deployment.yaml
+kubectl apply -f k8s/service.yaml
+kubectl apply -f k8s/servicemonitor.yaml
+kubectl apply -f k8s/prometheusrule.yaml
+```
+
+### 4. Verify Application
+
+```bash
+kubectl get pods -n ml-predictor
+kubectl get svc -n ml-predictor
+kubectl get endpoints -n ml-predictor ml-predictor
+kubectl logs -n ml-predictor deploy/ml-predictor
+```
+
+### 5. Verify Monitoring Objects
+
+```bash
+kubectl get servicemonitor -n ml-predictor
+kubectl get prometheusrule -n ml-predictor
+```
+
+Check in Prometheus that target `ml-predictor` is `UP` and run queries:
+
+- `http_requests_total`
+- `rate(http_requests_total[5m])`
+- `histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))`
+
+### 6. Access the Service Locally
+
+```bash
+kubectl port-forward -n ml-predictor svc/ml-predictor 8000:80
+```
+
+Then open `http://localhost:8000`.
+
+---
+
 ## Project Structure
 
 ```
