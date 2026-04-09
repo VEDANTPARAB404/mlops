@@ -33,13 +33,13 @@ def _encode_target(y):
             LABEL_ENCODER_PATH.unlink()
             logger.info("Removed old label encoder")
         logger.info(f"Target is numeric, no encoding needed. Unique values: {sorted(y.unique().tolist())}")
-        return y
+        return y, False
 
     label_encoder = LabelEncoder()
     encoded = label_encoder.fit_transform(y)
     joblib.dump(label_encoder, LABEL_ENCODER_PATH)
     logger.info(f"Label encoder fitted and saved. Classes: {label_encoder.classes_.tolist()}")
-    return encoded
+    return encoded, True
 
 
 def _save_confusion_matrix(y_test, y_pred):
@@ -68,11 +68,11 @@ def _save_feature_importance(model, columns):
     logger.info("Feature importance plot saved")
 
 
-def _build_test_prediction_payload(y_test, y_pred):
+def _build_test_prediction_payload(y_test, y_pred, target_encoded):
     actual_values = list(y_test)
     predicted_values = list(y_pred)
 
-    if LABEL_ENCODER_PATH.exists():
+    if target_encoded and LABEL_ENCODER_PATH.exists():
         label_encoder = joblib.load(LABEL_ENCODER_PATH)
         actual_values = label_encoder.inverse_transform(actual_values).tolist()
         predicted_values = label_encoder.inverse_transform(predicted_values).tolist()
@@ -138,7 +138,8 @@ def train_model(file_path, target_column):
         X = pd.get_dummies(X)
         logger.info(f"After one-hot encoding: {X.shape}")
 
-        y = _encode_target(y)
+        min_class_count = int(y.value_counts().min())
+        y, target_encoded = _encode_target(y)
 
         logger.info("Splitting data into train/test sets (80/20)")
 
@@ -156,7 +157,11 @@ def train_model(file_path, target_column):
         accuracy = accuracy_score(y_test, y_pred)
         logger.info(f"Test set accuracy: {accuracy:.4f}")
 
-        cv_scores = cross_val_score(model, X, y, cv=5)
+        cv_splits = min(5, len(X), min_class_count)
+        if cv_splits < 2:
+            raise ValidationError("Need at least 2 samples per class to run cross-validation")
+
+        cv_scores = cross_val_score(model, X, y, cv=cv_splits)
         cv_mean = cv_scores.mean()
         logger.info(f"Cross-validation scores: {cv_scores}, Mean: {cv_mean:.4f}")
 
@@ -165,12 +170,12 @@ def train_model(file_path, target_column):
 
         joblib.dump(model, MODEL_PATH)
         joblib.dump(X.columns.tolist(), FEATURES_PATH)
-        joblib.dump({"accuracy": float(accuracy), "cv_mean": float(cv_mean)}, METRICS_PATH)
+        joblib.dump({"accuracy": float(accuracy), "cv_mean": float(cv_mean), "target_encoded": target_encoded}, METRICS_PATH)
         logger.info("Model and features saved to pickle files")
 
         report = classification_report(y_test, y_pred)
         logger.info(f"Classification report:\n{report}")
-        test_payload = _build_test_prediction_payload(y_test, y_pred)
+        test_payload = _build_test_prediction_payload(y_test, y_pred, target_encoded)
         
         logger.info("Training completed successfully")
         return {
@@ -180,6 +185,7 @@ def train_model(file_path, target_column):
             "test_predictions": test_payload["test_predictions"],
             "test_summary": test_payload["test_summary"],
             "class_comparison": test_payload["class_comparison"],
+            "target_encoded": target_encoded,
         }
 
     except ValidationError as exc:

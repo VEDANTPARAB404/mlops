@@ -232,397 +232,222 @@
 </div>
 
 <script>
-const state = {
-    csvData: [],
-    features: [],
-    dataStats: {},
-    predictionChart: null,
-    livePredictTimer: null,
-    activePredictRequestId: 0
+const state = { csvData: [], features: [], dataStats: {}, chart: null, predictTimer: null, requestId: 0 };
+const ids = [
+    'fileInput', 'targetInput', 'apiKeyInput', 'trainForm', 'trainButton', 'trainingStatus',
+    'dataPreviewSection', 'rowCount', 'dataTableBody', 'resultsSection', 'accuracyValue',
+    'cvMeanValue', 'reportValue', 'testTotal', 'testCorrect', 'testIncorrect', 'testAccuracy',
+    'testPredictionsBody', 'testPredictionChart', 'confusionMatrixImg', 'featureImportanceImg',
+    'predictionSection', 'predictForm', 'featuresContainer', 'predictionStatus',
+    'predictionResult', 'predictionValue', 'sampleDataBtn'
+];
+const el = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
+el.tableHeadRow = document.querySelector('#dataTable thead tr');
+
+const hide = (node, isHidden) => node.classList.toggle('hidden', isHidden);
+const setTrainLoading = isLoading => {
+    hide(el.trainingStatus, !isLoading);
+    el.trainButton.disabled = isLoading;
+    el.trainButton.textContent = isLoading ? 'Training...' : 'Begin Training';
 };
-
-const elements = {
-    fileInput: document.getElementById('fileInput'),
-    targetInput: document.getElementById('targetInput'),
-    apiKeyInput: document.getElementById('apiKeyInput'),
-    trainForm: document.getElementById('trainForm'),
-    trainButton: document.getElementById('trainButton'),
-    trainingStatus: document.getElementById('trainingStatus'),
-    dataPreviewSection: document.getElementById('dataPreviewSection'),
-    rowCount: document.getElementById('rowCount'),
-    tableHeadRow: document.querySelector('#dataTable thead tr'),
-    tableBody: document.getElementById('dataTableBody'),
-    resultsSection: document.getElementById('resultsSection'),
-    accuracyValue: document.getElementById('accuracyValue'),
-    cvMeanValue: document.getElementById('cvMeanValue'),
-    reportValue: document.getElementById('reportValue'),
-    testTotal: document.getElementById('testTotal'),
-    testCorrect: document.getElementById('testCorrect'),
-    testIncorrect: document.getElementById('testIncorrect'),
-    testAccuracy: document.getElementById('testAccuracy'),
-    testPredictionsBody: document.getElementById('testPredictionsBody'),
-    testPredictionChart: document.getElementById('testPredictionChart'),
-    confusionMatrixImg: document.getElementById('confusionMatrixImg'),
-    featureImportanceImg: document.getElementById('featureImportanceImg'),
-    predictionSection: document.getElementById('predictionSection'),
-    predictForm: document.getElementById('predictForm'),
-    featuresContainer: document.getElementById('featuresContainer'),
-    predictionStatus: document.getElementById('predictionStatus'),
-    predictionResult: document.getElementById('predictionResult'),
-    predictionValue: document.getElementById('predictionValue'),
-    sampleDataBtn: document.getElementById('sampleDataBtn')
-};
-
-function toggleHidden(element, hidden) {
-    element.classList.toggle('hidden', hidden);
-}
-
-function setTrainLoading(isLoading) {
-    toggleHidden(elements.trainingStatus, !isLoading);
-    elements.trainButton.disabled = isLoading;
-    elements.trainButton.textContent = isLoading ? 'Training...' : 'Begin Training';
-}
-
-function parseCSV(csv) {
-    const lines = csv.trim().split('\n').filter(line => line.trim());
-    if (!lines.length) {
-        return { headers: [], data: [] };
-    }
-
-    const headers = lines[0].split(',').map(value => value.trim().replace(/"/g, ''));
+const parseCsv = csv => {
+    const lines = csv.trim().split('\n').filter(Boolean);
+    if (!lines.length) return { headers: [], data: [] };
+    const headers = lines[0].split(',').map(v => v.trim().replace(/"/g, ''));
     const data = lines.slice(1).map(line => {
-        const values = line.split(',').map(value => value.trim().replace(/"/g, ''));
-        return headers.reduce((row, header, index) => {
-            row[header] = values[index] || '';
-            return row;
-        }, {});
+        const values = line.split(',').map(v => v.trim().replace(/"/g, ''));
+        return Object.fromEntries(headers.map((h, i) => [h, values[i] || '']));
     });
-
     return { headers, data };
+};
+const setImgCacheBust = () => {
+    const t = Date.now();
+    el.confusionMatrixImg.src = `/static/confusion_matrix.png?${t}`;
+    el.featureImportanceImg.src = `/static/feature_importance.png?${t}`;
+};
+const readJson = async response => {
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || payload.detail || 'Request failed');
+    return payload;
+};
+
+function previewData(headers, data) {
+    el.tableHeadRow.innerHTML = '<th class="text-left px-4 py-3 font-semibold text-gray-900 bg-indigo-50 text-xs uppercase tracking-wide">#</th>' +
+        headers.map(h => `<th class="text-left px-4 py-3 font-semibold text-gray-900 bg-indigo-50 text-xs uppercase tracking-wide">${h}</th>`).join('');
+
+    el.dataTableBody.innerHTML = data.slice(0, 10).map((row, i) => {
+        const bg = i % 2 === 0 ? 'bg-white' : 'bg-gray-50';
+        const cells = headers.map(h => `<td class="px-4 py-3 text-gray-700 text-sm font-mono">${row[h] || '—'}</td>`).join('');
+        return `<tr class="${bg} hover:bg-indigo-50 transition"><td class="px-4 py-3 font-medium text-gray-600 text-sm">${i + 1}</td>${cells}</tr>`;
+    }).join('');
+
+    el.rowCount.textContent = data.length;
+    hide(el.dataPreviewSection, false);
 }
 
-function displayDataPreview(headers, data) {
-    elements.tableHeadRow.innerHTML = '<th class="text-left px-4 py-3 font-semibold text-gray-900 bg-indigo-50 text-xs uppercase tracking-wide">#</th>';
-    headers.forEach(header => {
-        elements.tableHeadRow.innerHTML += `<th class="text-left px-4 py-3 font-semibold text-gray-900 bg-indigo-50 text-xs uppercase tracking-wide">${header}</th>`;
-    });
-
-    const rows = data.slice(0, 10).map((row, rowIndex) => {
-        const background = rowIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50';
-        const values = headers
-            .map(header => `<td class="px-4 py-3 text-gray-700 text-sm font-mono">${row[header] || '—'}</td>`)
-            .join('');
-        return `<tr class="${background} hover:bg-indigo-50 transition"><td class="px-4 py-3 font-medium text-gray-600 text-sm">${rowIndex + 1}</td>${values}</tr>`;
-    });
-
-    elements.tableBody.innerHTML = rows.join('');
-    elements.rowCount.textContent = data.length;
-    toggleHidden(elements.dataPreviewSection, false);
-}
-
-function calculateStats(data, featureList) {
-    const stats = {};
-
-    featureList.forEach(feature => {
-        const numericValues = data
-            .map(row => Number.parseFloat(row[feature]))
-            .filter(value => Number.isFinite(value));
-
-        if (!numericValues.length) {
-            return;
-        }
-
-        stats[feature] = {
-            min: Math.min(...numericValues),
-            max: Math.max(...numericValues)
-        };
-    });
-
-    return stats;
+function buildFeatureStats(data, features) {
+    return Object.fromEntries(features.map(feature => {
+        const nums = data.map(row => Number.parseFloat(row[feature])).filter(Number.isFinite);
+        return nums.length ? [feature, { min: Math.min(...nums), max: Math.max(...nums) }] : null;
+    }).filter(Boolean));
 }
 
 function renderFeatureInputs(features) {
-    const html = features.map(feature => {
-        const stats = state.dataStats[feature];
-        const range = stats ? ` (${stats.min.toFixed(2)} - ${stats.max.toFixed(2)})` : '';
-        return `
-            <div>
-                <label class="block text-sm font-medium text-gray-900 mb-2">${feature}${range}</label>
-                <input type="number" step="any" name="${feature}" required class="w-full border border-gray-300 rounded-lg px-4 py-2 text-gray-900 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500">
-            </div>
-        `;
-    });
-
-    elements.featuresContainer.innerHTML = html.join('');
-    elements.featuresContainer.querySelectorAll('input[name]').forEach(input => {
-        input.addEventListener('input', scheduleLivePrediction);
-    });
-    toggleHidden(elements.predictionSection, false);
+    el.featuresContainer.innerHTML = features.map(feature => {
+        const s = state.dataStats[feature];
+        const range = s ? ` (${s.min.toFixed(2)} - ${s.max.toFixed(2)})` : '';
+        return `<div>
+            <label class="block text-sm font-medium text-gray-900 mb-2">${feature}${range}</label>
+            <input type="number" step="any" name="${feature}" required class="w-full border border-gray-300 rounded-lg px-4 py-2 text-gray-900 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500">
+        </div>`;
+    }).join('');
+    el.featuresContainer.querySelectorAll('input[name]').forEach(input => input.addEventListener('input', scheduleLivePrediction));
+    hide(el.predictionSection, false);
 }
 
-function fillRandomFeatureValues() {
-    if (!state.features.length || !Object.keys(state.dataStats).length) {
-        alert('No feature ranges found. Train the model first.');
-        return;
-    }
-
-    state.features.forEach(feature => {
-        const input = document.querySelector(`input[name="${feature}"]`);
-        const stats = state.dataStats[feature];
-        if (!input || !stats) {
-            return;
-        }
-        const randomValue = Math.random() * (stats.max - stats.min) + stats.min;
-        input.value = randomValue.toFixed(4);
-    });
-
-    scheduleLivePrediction();
+function renderTestPredictions(rows) {
+    el.testPredictionsBody.innerHTML = rows.slice(0, 25).map((row, i) => {
+        const bg = i % 2 === 0 ? 'bg-white' : 'bg-gray-50';
+        const status = row.is_correct
+            ? ['Correct', 'text-emerald-700 bg-emerald-50 border-emerald-200']
+            : ['Mismatch', 'text-rose-700 bg-rose-50 border-rose-200'];
+        return `<tr class="${bg}">
+            <td class="px-4 py-3 text-gray-700 font-mono">${row.index}</td>
+            <td class="px-4 py-3 text-gray-900 font-medium">${row.actual}</td>
+            <td class="px-4 py-3 text-gray-900 font-medium">${row.predicted}</td>
+            <td class="px-4 py-3"><span class="inline-flex items-center px-2 py-1 rounded-md border text-xs font-semibold ${status[1]}">${status[0]}</span></td>
+        </tr>`;
+    }).join('');
 }
 
-function getPredictionPayload(requireCompleteValues) {
-    const payload = Object.fromEntries(new FormData(elements.predictForm));
+function renderClassChart(comp = {}) {
+    const labels = comp.labels || [];
+    if (!el.testPredictionChart || !labels.length) return;
+    if (state.chart) state.chart.destroy();
+    state.chart = new Chart(el.testPredictionChart, {
+        type: 'bar',
+        data: {
+            labels,
+            datasets: [
+                { label: 'Actual (Test)', data: comp.actual_counts || [], backgroundColor: 'rgba(79, 70, 229, 0.75)', borderColor: 'rgba(79, 70, 229, 1)', borderWidth: 1 },
+                { label: 'Predicted', data: comp.predicted_counts || [], backgroundColor: 'rgba(16, 185, 129, 0.75)', borderColor: 'rgba(16, 185, 129, 1)', borderWidth: 1 }
+            ]
+        },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'top' } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
+    });
+}
 
-    for (const feature of state.features) {
-        const value = payload[feature];
+function renderTestAnalysis(predictions = [], summary = {}, comparison = {}) {
+    const total = summary.total || 0;
+    const correct = summary.correct || 0;
+    el.testTotal.textContent = total;
+    el.testCorrect.textContent = correct;
+    el.testIncorrect.textContent = summary.incorrect || 0;
+    el.testAccuracy.textContent = total ? `${((correct / total) * 100).toFixed(1)}%` : '—';
+    renderTestPredictions(predictions);
+    renderClassChart(comparison);
+}
 
-        if (value === undefined || value === '') {
-            if (requireCompleteValues) {
-                throw new Error(`Please provide a value for ${feature}`);
-            }
+function predictionPayload(requireComplete) {
+    const payload = Object.fromEntries(new FormData(el.predictForm));
+    for (const f of state.features) {
+        const v = payload[f];
+        if (v === '' || v === undefined) {
+            if (requireComplete) throw new Error(`Please provide a value for ${f}`);
             return null;
         }
-
-        if (!Number.isFinite(Number.parseFloat(value))) {
-            if (requireCompleteValues) {
-                throw new Error(`Invalid numeric value for ${feature}`);
-            }
+        if (!Number.isFinite(Number.parseFloat(v))) {
+            if (requireComplete) throw new Error(`Invalid numeric value for ${f}`);
             return null;
         }
     }
-
     return payload;
 }
 
-async function requestPrediction(payload, showErrorAlert) {
-    if (!elements.apiKeyInput.value) {
-        if (showErrorAlert) {
-            alert('Please enter your API key in the training form above');
-        }
+async function predict(payload, showError) {
+    if (!el.apiKeyInput.value) {
+        if (showError) alert('Please enter your API key in the training form above');
         return;
     }
 
-    const requestId = ++state.activePredictRequestId;
-
-    toggleHidden(elements.predictionStatus, false);
-    toggleHidden(elements.predictionResult, true);
+    const req = ++state.requestId;
+    hide(el.predictionStatus, false);
+    hide(el.predictionResult, true);
 
     try {
-        const response = await fetch('/predict', {
+        const result = await readJson(await fetch('/predict', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-API-Key': elements.apiKeyInput.value
-            },
+            headers: { 'Content-Type': 'application/json', 'X-API-Key': el.apiKeyInput.value },
             body: JSON.stringify({ data: payload })
-        });
-
-        const result = await readJsonResponse(response);
-
-        if (requestId !== state.activePredictRequestId) {
-            return;
-        }
-
-        elements.predictionValue.textContent = result.prediction;
-        toggleHidden(elements.predictionResult, false);
+        }));
+        if (req !== state.requestId) return;
+        el.predictionValue.textContent = result.prediction;
+        hide(el.predictionResult, false);
     } catch (error) {
-        if (requestId !== state.activePredictRequestId) {
-            return;
-        }
-
-        if (showErrorAlert) {
-            alert(`Prediction error: ${error.message}`);
-        }
+        if (req === state.requestId && showError) alert(`Prediction error: ${error.message}`);
     } finally {
-        if (requestId === state.activePredictRequestId) {
-            toggleHidden(elements.predictionStatus, true);
-        }
+        if (req === state.requestId) hide(el.predictionStatus, true);
     }
 }
 
 function scheduleLivePrediction() {
-    if (state.livePredictTimer) {
-        clearTimeout(state.livePredictTimer);
-    }
-
-    state.livePredictTimer = setTimeout(async () => {
-        let payload;
-
-        try {
-            payload = getPredictionPayload(false);
-        } catch (error) {
-            return;
-        }
-
-        if (!payload) {
-            return;
-        }
-
-        await requestPrediction(payload, false);
+    clearTimeout(state.predictTimer);
+    state.predictTimer = setTimeout(async () => {
+        const payload = predictionPayload(false);
+        if (payload) await predict(payload, false);
     }, 450);
 }
 
-function renderTestPredictionTable(testPredictions) {
-    const rows = testPredictions.slice(0, 25).map((row, rowIndex) => {
-        const background = rowIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50';
-        const statusStyle = row.is_correct
-            ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
-            : 'text-rose-700 bg-rose-50 border-rose-200';
-        const statusText = row.is_correct ? 'Correct' : 'Mismatch';
-
-        return `
-            <tr class="${background}">
-                <td class="px-4 py-3 text-gray-700 font-mono">${row.index}</td>
-                <td class="px-4 py-3 text-gray-900 font-medium">${row.actual}</td>
-                <td class="px-4 py-3 text-gray-900 font-medium">${row.predicted}</td>
-                <td class="px-4 py-3">
-                    <span class="inline-flex items-center px-2 py-1 rounded-md border text-xs font-semibold ${statusStyle}">${statusText}</span>
-                </td>
-            </tr>
-        `;
-    });
-
-    elements.testPredictionsBody.innerHTML = rows.join('');
-}
-
-function renderClassComparisonChart(classComparison) {
-    if (!elements.testPredictionChart || !classComparison || !classComparison.labels || !classComparison.labels.length) {
+function fillRandomValues() {
+    if (!state.features.length || !Object.keys(state.dataStats).length) {
+        alert('No feature ranges found. Train the model first.');
         return;
     }
-
-    if (state.predictionChart) {
-        state.predictionChart.destroy();
-    }
-
-    state.predictionChart = new Chart(elements.testPredictionChart, {
-        type: 'bar',
-        data: {
-            labels: classComparison.labels,
-            datasets: [
-                {
-                    label: 'Actual (Test)',
-                    data: classComparison.actual_counts,
-                    backgroundColor: 'rgba(79, 70, 229, 0.75)',
-                    borderColor: 'rgba(79, 70, 229, 1)',
-                    borderWidth: 1
-                },
-                {
-                    label: 'Predicted',
-                    data: classComparison.predicted_counts,
-                    backgroundColor: 'rgba(16, 185, 129, 0.75)',
-                    borderColor: 'rgba(16, 185, 129, 1)',
-                    borderWidth: 1
-                }
-            ]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    position: 'top'
-                }
-            },
-            scales: {
-                y: {
-                    beginAtZero: true,
-                    ticks: {
-                        precision: 0
-                    }
-                }
-            }
-        }
+    state.features.forEach(feature => {
+        const input = document.querySelector(`input[name="${feature}"]`);
+        const s = state.dataStats[feature];
+        if (!input || !s) return;
+        input.value = (Math.random() * (s.max - s.min) + s.min).toFixed(4);
     });
+    scheduleLivePrediction();
 }
 
-function renderTestPredictionAnalysis(testPredictions, testSummary, classComparison) {
-    const total = testSummary?.total || 0;
-    const correct = testSummary?.correct || 0;
-    const incorrect = testSummary?.incorrect || 0;
-    const accuracy = total ? `${((correct / total) * 100).toFixed(1)}%` : '—';
-
-    elements.testTotal.textContent = total;
-    elements.testCorrect.textContent = correct;
-    elements.testIncorrect.textContent = incorrect;
-    elements.testAccuracy.textContent = accuracy;
-
-    renderTestPredictionTable(testPredictions || []);
-    renderClassComparisonChart(classComparison || { labels: [], actual_counts: [], predicted_counts: [] });
-}
-
-async function readJsonResponse(response) {
-    const payload = await response.json();
-    if (!response.ok) {
-        throw new Error(payload.error || payload.detail || 'Request failed');
-    }
-    return payload;
-}
-
-elements.fileInput.addEventListener('change', async event => {
+el.fileInput.addEventListener('change', async event => {
     const file = event.target.files[0];
-    if (!file) {
-        return;
-    }
-
-    const { headers, data } = parseCSV(await file.text());
+    if (!file) return;
+    const { headers, data } = parseCsv(await file.text());
     state.csvData = data;
-    displayDataPreview(headers, data);
+    previewData(headers, data);
 });
 
-elements.trainForm.addEventListener('submit', async event => {
+el.trainForm.addEventListener('submit', async event => {
     event.preventDefault();
-
-    if (!elements.fileInput.files[0]) {
-        alert('Please select a file');
-        return;
-    }
-
-    if (!elements.apiKeyInput.value) {
-        alert('Please enter your API key');
-        return;
-    }
+    if (!el.fileInput.files[0]) return alert('Please select a file');
+    if (!el.apiKeyInput.value) return alert('Please enter your API key');
 
     const formData = new FormData();
-    formData.append('file', elements.fileInput.files[0]);
-    formData.append('target', elements.targetInput.value);
-
+    formData.append('file', el.fileInput.files[0]);
+    formData.append('target', el.targetInput.value);
     setTrainLoading(true);
 
     try {
-        const response = await fetch('/train', {
+        const result = await readJson(await fetch('/train', {
             method: 'POST',
-            headers: { 'X-API-Key': elements.apiKeyInput.value },
+            headers: { 'X-API-Key': el.apiKeyInput.value },
             body: formData
-        });
+        }));
 
-        const result = await readJsonResponse(response);
-
-        elements.accuracyValue.textContent = `${(result.accuracy * 100).toFixed(1)}%`;
-        elements.cvMeanValue.textContent = `${(result.cv_mean * 100).toFixed(1)}%`;
-        elements.reportValue.textContent = result.report;
-        renderTestPredictionAnalysis(result.test_predictions, result.test_summary, result.class_comparison);
-        toggleHidden(elements.resultsSection, false);
-
-        const cacheBuster = Date.now();
-        elements.confusionMatrixImg.src = `/static/confusion_matrix.png?${cacheBuster}`;
-        elements.featureImportanceImg.src = `/static/feature_importance.png?${cacheBuster}`;
+        el.accuracyValue.textContent = `${(result.accuracy * 100).toFixed(1)}%`;
+        el.cvMeanValue.textContent = `${(result.cv_mean * 100).toFixed(1)}%`;
+        el.reportValue.textContent = result.report;
+        renderTestAnalysis(result.test_predictions, result.test_summary, result.class_comparison);
+        hide(el.resultsSection, false);
+        setImgCacheBust();
 
         state.features = result.features;
-        state.dataStats = calculateStats(state.csvData, state.features);
+        state.dataStats = buildFeatureStats(state.csvData, state.features);
         renderFeatureInputs(state.features);
-
-        setTimeout(() => {
-            elements.resultsSection.scrollIntoView({ behavior: 'smooth' });
-        }, 300);
+        setTimeout(() => el.resultsSection.scrollIntoView({ behavior: 'smooth' }), 300);
     } catch (error) {
         alert(`Error: ${error.message}`);
     } finally {
@@ -630,24 +455,19 @@ elements.trainForm.addEventListener('submit', async event => {
     }
 });
 
-elements.sampleDataBtn.addEventListener('click', event => {
+el.sampleDataBtn.addEventListener('click', event => {
     event.preventDefault();
-    fillRandomFeatureValues();
+    fillRandomValues();
 });
 
-elements.predictForm.addEventListener('submit', async event => {
+el.predictForm.addEventListener('submit', async event => {
     event.preventDefault();
-
-    let payload;
-
     try {
-        payload = getPredictionPayload(true);
+        const payload = predictionPayload(true);
+        await predict(payload, true);
     } catch (error) {
         alert(error.message);
-        return;
     }
-
-    await requestPrediction(payload, true);
 });
 </script>
 

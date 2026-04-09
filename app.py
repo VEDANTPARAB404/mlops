@@ -16,6 +16,7 @@ from exceptions import (
     ModelNotFoundError,
     InvalidInputError,
     PredictionError,
+    TrainingError,
     ValidationError,
 )
 from train_model import train_model
@@ -59,6 +60,16 @@ def load_persisted_metrics():
                 MODEL_ACCURACY.set(float(metrics["accuracy"]))
             except (TypeError, ValueError):
                 logger.warning("Persisted accuracy value is invalid")
+            return metrics
+    return {}
+
+
+def should_decode_prediction() -> bool:
+    if METRICS_PATH.exists():
+        metrics = joblib.load(METRICS_PATH)
+        if isinstance(metrics, dict) and "target_encoded" in metrics:
+            return bool(metrics["target_encoded"])
+    return LABEL_ENCODER_PATH.exists()
 
 
 load_persisted_metrics()
@@ -89,6 +100,7 @@ _ERROR_MAP = {
     InvalidInputError:  (400, "Invalid input"),
     ModelNotFoundError: (404, "Model not found"),
     PredictionError:    (500, "Prediction failed"),
+    TrainingError:      (500, "Training failed"),
     MLPredictorException: (500, "Server error"),
 }
 
@@ -146,13 +158,20 @@ async def train_endpoint(
         raise
     except Exception as e:
         TRAINING_RUNS.labels(status="error").inc()
-        raise PredictionError(f"Model training failed: {e}")
+        raise TrainingError(f"Model training failed: {e}")
     finally:
         TRAINING_LATENCY.observe(time.time() - start)
 
     MODEL_ACCURACY.set(float(results["accuracy"]))
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
-    joblib.dump({"accuracy": float(results["accuracy"]), "cv_mean": float(results["cv_mean"])}, METRICS_PATH)
+    joblib.dump(
+        {
+            "accuracy": float(results["accuracy"]),
+            "cv_mean": float(results["cv_mean"]),
+            "target_encoded": bool(results.get("target_encoded", False)),
+        },
+        METRICS_PATH,
+    )
     features = joblib.load(FEATURES_PATH)
     logger.info(f"Training done - {len(features)} features, accuracy: {results['accuracy']:.4f}")
 
@@ -183,8 +202,11 @@ async def predict(request: PredictionRequest, api_key: str = Depends(verify_api_
 
         prediction = model.predict([input_data])
 
-        if LABEL_ENCODER_PATH.exists():
-            prediction = joblib.load(LABEL_ENCODER_PATH).inverse_transform(prediction)
+        if should_decode_prediction() and LABEL_ENCODER_PATH.exists():
+            try:
+                prediction = joblib.load(LABEL_ENCODER_PATH).inverse_transform(prediction)
+            except ValueError as exc:
+                logger.warning(f"Skipping label decoding for prediction result: {exc}")
 
         PREDICTION_RUNS.labels(status="success").inc()
         return {"status": "success", "prediction": str(prediction[0])}
