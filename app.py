@@ -1,5 +1,6 @@
 from pathlib import Path
 from fastapi import FastAPI, File, UploadFile, Form, Request, Depends, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -7,6 +8,7 @@ from pydantic import BaseModel
 import joblib
 import time
 import uuid
+import os
 from prometheus_client import Counter, Gauge, Histogram, generate_latest, CONTENT_TYPE_LATEST
 
 from logger_config import logger
@@ -22,6 +24,15 @@ from exceptions import (
 from train_model import train_model
 
 app = FastAPI(title="ML Predictor", description="FastAPI ML Model Prediction Service")
+
+cors_origins = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "*").split(",") if origin.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins or ["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 ARTIFACTS_DIR = Path("/data")
 MODEL_PATH = ARTIFACTS_DIR / "model.pkl"

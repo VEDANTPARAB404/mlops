@@ -266,9 +266,30 @@ const setImgCacheBust = () => {
     el.featureImportanceImg.src = `/static/feature_importance.png?${t}`;
 };
 const readJson = async response => {
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || payload.detail || 'Request failed');
+    const raw = await response.text();
+    let payload = null;
+    try {
+        payload = raw ? JSON.parse(raw) : null;
+    } catch {
+        payload = null;
+    }
+    if (!response.ok) {
+        const fallback = raw && !raw.trim().startsWith('<') ? raw.trim() : `Request failed (${response.status})`;
+        throw new Error((payload && (payload.error || payload.detail || payload.details)) || fallback);
+    }
+    if (!payload) throw new Error('Server returned an empty response');
     return payload;
+};
+
+const fetchWithHelpfulError = async (url, options) => {
+    try {
+        return await fetch(url, options);
+    } catch (error) {
+        if (error instanceof TypeError) {
+            throw new Error('Network error. Check server availability, CORS configuration, and that this URL is reachable from your browser.');
+        }
+        throw error;
+    }
 };
 
 function previewData(headers, data) {
@@ -375,7 +396,7 @@ async function predict(payload, showError) {
     hide(el.predictionResult, true);
 
     try {
-        const result = await readJson(await fetch('/predict', {
+        const result = await readJson(await fetchWithHelpfulError('/predict', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-API-Key': el.apiKeyInput.value },
             body: JSON.stringify({ data: payload })
@@ -431,7 +452,7 @@ el.trainForm.addEventListener('submit', async event => {
     setTrainLoading(true);
 
     try {
-        const result = await readJson(await fetch('/train', {
+        const result = await readJson(await fetchWithHelpfulError('/train', {
             method: 'POST',
             headers: { 'X-API-Key': el.apiKeyInput.value },
             body: formData
