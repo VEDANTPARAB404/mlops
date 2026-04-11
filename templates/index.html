@@ -281,14 +281,21 @@ const readJson = async response => {
     return payload;
 };
 
-const fetchWithHelpfulError = async (url, options) => {
+const fetchWithHelpfulError = async (url, options, timeoutMs = 120000) => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
-        return await fetch(url, options);
+        return await fetch(url, { ...options, signal: controller.signal });
     } catch (error) {
+        if (error.name === 'AbortError') {
+            throw new Error('Request timed out while training. Check server logs and try a smaller dataset or reduce model complexity.');
+        }
         if (error instanceof TypeError) {
             throw new Error('Network error. Check server availability, CORS configuration, and that this URL is reachable from your browser.');
         }
         throw error;
+    } finally {
+        clearTimeout(timeoutId);
     }
 };
 
@@ -456,7 +463,7 @@ el.trainForm.addEventListener('submit', async event => {
             method: 'POST',
             headers: { 'X-API-Key': el.apiKeyInput.value },
             body: formData
-        }));
+        }, 180000));
 
         el.accuracyValue.textContent = `${(result.accuracy * 100).toFixed(1)}%`;
         el.cvMeanValue.textContent = `${(result.cv_mean * 100).toFixed(1)}%`;

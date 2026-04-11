@@ -1,4 +1,6 @@
 import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
 import joblib
@@ -147,8 +149,13 @@ def train_model(file_path, target_column):
             X, y, test_size=0.2, random_state=42
         )
 
-        model = RandomForestClassifier(n_estimators=300, max_depth=None, random_state=42)
-        logger.info("Training RandomForestClassifier (n_estimators=300)")
+        model = RandomForestClassifier(
+            n_estimators=120,
+            max_depth=None,
+            random_state=42,
+            n_jobs=-1,
+        )
+        logger.info("Training RandomForestClassifier (n_estimators=120, n_jobs=-1)")
         model.fit(X_train, y_train)
         logger.info("Model training completed")
 
@@ -157,7 +164,7 @@ def train_model(file_path, target_column):
         accuracy = accuracy_score(y_test, y_pred)
         logger.info(f"Test set accuracy: {accuracy:.4f}")
 
-        cv_splits = min(5, len(X), min_class_count)
+        cv_splits = min(3, len(X), min_class_count)
         if cv_splits < 2:
             raise ValidationError("Need at least 2 samples per class to run cross-validation")
 
