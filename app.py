@@ -1,10 +1,11 @@
 from pathlib import Path
 from fastapi import FastAPI, File, UploadFile, Form, Request, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
+import pandas as pd
 import joblib
 import time
 import uuid
@@ -39,6 +40,9 @@ MODEL_PATH = ARTIFACTS_DIR / "model.pkl"
 FEATURES_PATH = ARTIFACTS_DIR / "features.pkl"
 LABEL_ENCODER_PATH = ARTIFACTS_DIR / "label_encoder.pkl"
 METRICS_PATH = ARTIFACTS_DIR / "metrics.pkl"
+SCALER_PATH = ARTIFACTS_DIR / "scaler.pkl"
+FEATURE_BOUNDS_PATH = ARTIFACTS_DIR / "feature_bounds.pkl"
+PROCESSED_CSV_PATH = ARTIFACTS_DIR / "processed_uploaded.csv"
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
@@ -58,9 +62,32 @@ class PredictionRequest(BaseModel):
 
 
 def load_model_and_features():
-    if not MODEL_PATH.exists() or not FEATURES_PATH.exists():
+    if not MODEL_PATH.exists() or not FEATURES_PATH.exists() or not SCALER_PATH.exists() or not FEATURE_BOUNDS_PATH.exists():
         raise ModelNotFoundError("Model not found. Please train a model first.")
-    return joblib.load(MODEL_PATH), joblib.load(FEATURES_PATH)
+    return (
+        joblib.load(MODEL_PATH),
+        joblib.load(FEATURES_PATH),
+        joblib.load(SCALER_PATH),
+        joblib.load(FEATURE_BOUNDS_PATH),
+    )
+
+
+def _validate_input_bounds(input_map: dict, feature_bounds: dict):
+    violations = []
+    for feature, value in input_map.items():
+        bounds = feature_bounds.get(feature)
+        if not bounds:
+            continue
+        min_v = float(bounds.get("min", value))
+        max_v = float(bounds.get("max", value))
+        if value < min_v or value > max_v:
+            violations.append(f"{feature}: {value} not in [{min_v}, {max_v}]")
+
+    if violations:
+        details = "; ".join(violations[:5])
+        if len(violations) > 5:
+            details += f"; and {len(violations) - 5} more"
+        raise InvalidInputError(f"Out-of-bound feature value(s): {details}")
 
 
 def load_persisted_metrics():
@@ -147,22 +174,49 @@ async def health_check():
     return {"status": "healthy"}
 
 
+@app.get("/processed-csv")
+async def download_processed_csv(api_key: str = Depends(verify_api_key)):
+    if not PROCESSED_CSV_PATH.exists():
+        raise ModelNotFoundError("Processed CSV not found. Train a model first.")
+
+    return FileResponse(
+        path=PROCESSED_CSV_PATH,
+        filename="processed_uploaded.csv",
+        media_type="text/csv",
+    )
+
+
 @app.post("/train")
 async def train_endpoint(
-    file: UploadFile = File(...),
+    file: UploadFile | None = File(None),
     target: str = Form(...),
+    use_preprocessed_data: bool = Form(False),
     api_key: str = Depends(verify_api_key),
 ):
-    logger.info(f"Training request - File: {file.filename}, Target: {target}")
-    if not file.filename or not file.filename.endswith(".csv"):
-        raise ValidationError("File must be in CSV format")
+    logger.info(
+        f"Training request - File: {getattr(file, 'filename', None)}, Target: {target}, "
+        f"use_preprocessed_data={use_preprocessed_data}"
+    )
 
-    contents = await file.read()
-    Path("uploaded.csv").write_bytes(contents)
+    if use_preprocessed_data:
+        if not PROCESSED_CSV_PATH.exists():
+            raise ValidationError("Preprocessed CSV not found. Train once with the raw CSV first.")
+        training_path = str(PROCESSED_CSV_PATH)
+        logger.info(f"Using preprocessed CSV for training: {training_path}")
+    else:
+        if file is None or not file.filename:
+            raise ValidationError("Please upload a CSV file")
+        if not file.filename.endswith(".csv"):
+            raise ValidationError("File must be in CSV format")
+
+        contents = await file.read()
+        Path("uploaded.csv").write_bytes(contents)
+        training_path = "uploaded.csv"
+        logger.info(f"Using uploaded raw CSV for training: {training_path}")
 
     start = time.time()
     try:
-        results = train_model("uploaded.csv", target)
+        results = train_model(training_path, target)
         TRAINING_RUNS.labels(status="success").inc()
     except ValidationError:
         TRAINING_RUNS.labels(status="error").inc()
@@ -195,6 +249,10 @@ async def train_endpoint(
         "test_predictions": results["test_predictions"],
         "test_summary": results["test_summary"],
         "class_comparison": results["class_comparison"],
+        "processed_csv_path": results.get("processed_csv_path"),
+        "processed_csv_download_url": "/processed-csv",
+        "feature_bounds": results.get("feature_bounds", {}),
+        "training_source": "preprocessed" if use_preprocessed_data else "raw",
     }
 
 
@@ -202,16 +260,21 @@ async def train_endpoint(
 async def predict(request: PredictionRequest, api_key: str = Depends(verify_api_key)):
     start = time.time()
     try:
-        model, features = load_model_and_features()
+        model, features, scaler, feature_bounds = load_model_and_features()
 
         try:
-            input_data = [float(request.data[f]) for f in features]
+            input_map = {f: float(request.data[f]) for f in features}
         except KeyError as e:
             raise InvalidInputError(f"Missing feature: {e}")
         except ValueError as e:
             raise InvalidInputError(f"Invalid data type: {e}")
 
-        prediction = model.predict([input_data])
+        _validate_input_bounds(input_map, feature_bounds)
+
+        input_frame = pd.DataFrame([input_map], columns=features)
+        input_scaled = scaler.transform(input_frame)
+
+        prediction = model.predict(input_scaled)
 
         if should_decode_prediction() and LABEL_ENCODER_PATH.exists():
             try:

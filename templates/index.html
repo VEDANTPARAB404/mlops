@@ -19,6 +19,10 @@
 
 <body class="bg-white min-h-screen">
 
+<div id="appToast" class="hidden fixed top-6 right-6 z-[9999] max-w-md w-[92%] sm:w-full rounded-lg border px-4 py-3 shadow-lg transition">
+    <p id="appToastText" class="text-sm font-medium"></p>
+</div>
+
 <!-- Navigation -->
 <nav class="border-b border-gray-200 sticky top-0 z-50 bg-white">
     <div class="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
@@ -54,7 +58,7 @@
             <div>
                 <label class="block text-sm font-semibold text-gray-900 mb-3">Upload CSV</label>
                 <div class="relative border-2 border-dashed border-gray-300 rounded-lg p-8 hover:border-indigo-500 transition cursor-pointer hover:bg-gray-50">
-                    <input type="file" id="fileInput" name="file" accept=".csv" required
+                    <input type="file" id="fileInput" name="file" accept=".csv"
                         class="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
                     <div class="text-center">
                         <div class="text-4xl mb-2">📋</div>
@@ -62,6 +66,27 @@
                         <p class="text-xs text-gray-500 mt-1">Supports CSV format up to 100MB</p>
                     </div>
                 </div>
+            </div>
+
+            <div>
+                <label class="block text-sm font-semibold text-gray-900 mb-3">Training Data Source</label>
+                <div class="grid sm:grid-cols-2 gap-3">
+                    <label class="flex items-start gap-3 p-4 border border-gray-300 rounded-lg cursor-pointer hover:border-indigo-500 hover:bg-indigo-50/40 transition">
+                        <input type="radio" name="trainingSource" value="raw" checked class="mt-1 text-indigo-600">
+                        <span>
+                            <span class="block text-sm font-semibold text-gray-900">Use uploaded CSV</span>
+                            <span class="block text-xs text-gray-500 mt-1">Train from the raw file you upload now.</span>
+                        </span>
+                    </label>
+                    <label class="flex items-start gap-3 p-4 border border-gray-300 rounded-lg cursor-pointer hover:border-indigo-500 hover:bg-indigo-50/40 transition">
+                        <input type="radio" name="trainingSource" value="preprocessed" class="mt-1 text-indigo-600">
+                        <span>
+                            <span class="block text-sm font-semibold text-gray-900">Use preprocessed CSV</span>
+                            <span class="block text-xs text-gray-500 mt-1">Train from the saved processed file on the server.</span>
+                        </span>
+                    </label>
+                </div>
+                <p class="text-xs text-gray-500 mt-2">Preprocessed data is available after you train once with the raw upload.</p>
             </div>
 
             <div>
@@ -135,6 +160,13 @@
                 <pre id="reportValue" class="bg-white p-6 rounded-lg text-sm text-gray-700 font-mono overflow-x-auto border border-gray-200"></pre>
             </div>
 
+            <div id="processedCsvNotice" class="hidden mb-10 p-4 bg-emerald-50 border border-emerald-200 rounded-lg">
+                <p class="text-sm text-emerald-800 font-medium mb-3">Training and testing used a preprocessed CSV.</p>
+                <button id="downloadProcessedCsvBtn" type="button" class="bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition text-sm font-semibold">
+                    Download Preprocessed CSV
+                </button>
+            </div>
+
             <div class="mb-10">
                 <h3 class="text-lg font-semibold text-gray-900 mb-4">Test Data Prediction Analysis</h3>
 
@@ -199,7 +231,7 @@
         <div class="bg-white border border-gray-200 rounded-xl p-10">
 
             <h2 class="text-2xl font-bold text-gray-900 mb-1">Generate Predictions</h2>
-            <p class="text-gray-600 mb-8">Input feature values to make predictions</p>
+            <p class="text-gray-600 mb-8">Drag each slider to set feature values for prediction</p>
 
             <form id="predictForm" class="grid md:grid-cols-2 gap-6">
 
@@ -239,12 +271,29 @@ const ids = [
     'cvMeanValue', 'reportValue', 'testTotal', 'testCorrect', 'testIncorrect', 'testAccuracy',
     'testPredictionsBody', 'testPredictionChart', 'confusionMatrixImg', 'featureImportanceImg',
     'predictionSection', 'predictForm', 'featuresContainer', 'predictionStatus',
-    'predictionResult', 'predictionValue', 'sampleDataBtn'
+    'predictionResult', 'predictionValue', 'sampleDataBtn', 'processedCsvNotice',
+    'downloadProcessedCsvBtn', 'appToast', 'appToastText'
 ];
 const el = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
 el.tableHeadRow = document.querySelector('#dataTable thead tr');
+state.processedCsvDownloadUrl = null;
+state.featureBounds = {};
+state.toastTimer = null;
 
 const hide = (node, isHidden) => node.classList.toggle('hidden', isHidden);
+const showSitePopup = (message, kind = 'info') => {
+    const styles = {
+        info: 'bg-indigo-50 border-indigo-200 text-indigo-800',
+        success: 'bg-emerald-50 border-emerald-200 text-emerald-800',
+        error: 'bg-rose-50 border-rose-200 text-rose-800'
+    };
+    el.appToast.className = `fixed top-6 right-6 z-[9999] max-w-md w-[92%] sm:w-full rounded-lg border px-4 py-3 shadow-lg transition ${styles[kind] || styles.info}`;
+    el.appToastText.textContent = message;
+    hide(el.appToast, false);
+    clearTimeout(state.toastTimer);
+    state.toastTimer = setTimeout(() => hide(el.appToast, true), 3600);
+};
+
 const setTrainLoading = isLoading => {
     hide(el.trainingStatus, !isLoading);
     el.trainButton.disabled = isLoading;
@@ -320,17 +369,83 @@ function buildFeatureStats(data, features) {
     }).filter(Boolean));
 }
 
+function resolveFeatureBounds(feature) {
+    const source = state.featureBounds[feature] || state.dataStats[feature];
+    if (!source) return null;
+
+    const min = Number.parseFloat(source.min);
+    const max = Number.parseFloat(source.max);
+    if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+
+    if (min <= max) return { min, max };
+    return { min: max, max: min };
+}
+
+function sliderStepForBounds(bounds) {
+    if (!bounds) return 0.01;
+    const span = bounds.max - bounds.min;
+    if (span <= 0) return 1;
+
+    const roughStep = span / 200;
+    const bounded = Math.min(Math.max(roughStep, 0.0001), span);
+    return Number(bounded.toPrecision(4));
+}
+
+function formatFeatureValue(value, step) {
+    const decimals = Math.min(6, Math.max(0, ((String(step).split('.')[1] || '').length)));
+    return Number.parseFloat(value).toFixed(decimals);
+}
+
 function renderFeatureInputs(features) {
     el.featuresContainer.innerHTML = features.map(feature => {
-        const s = state.dataStats[feature];
-        const range = s ? ` (${s.min.toFixed(2)} - ${s.max.toFixed(2)})` : '';
-        return `<div>
-            <label class="block text-sm font-medium text-gray-900 mb-2">${feature}${range}</label>
-            <input type="number" step="any" name="${feature}" required class="w-full border border-gray-300 rounded-lg px-4 py-2 text-gray-900 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500">
+        const bounds = resolveFeatureBounds(feature);
+        if (!bounds) {
+            return `<div class="md:col-span-2">
+                <label class="block text-sm font-medium text-gray-900 mb-2">${feature}</label>
+                <p class="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-md px-3 py-2">No numeric range available for this feature.</p>
+            </div>`;
+        }
+
+        const step = sliderStepForBounds(bounds);
+        const startValue = bounds.min === bounds.max ? bounds.min : Number(((bounds.min + bounds.max) / 2).toFixed(6));
+        const disabled = bounds.min === bounds.max ? 'disabled' : '';
+        const minLabel = formatFeatureValue(bounds.min, step);
+        const maxLabel = formatFeatureValue(bounds.max, step);
+        const valueLabel = formatFeatureValue(startValue, step);
+
+        return `<div class="space-y-2" data-feature-card="${feature}">
+            <div class="flex items-center justify-between gap-3">
+                <label class="text-sm font-medium text-gray-900">${feature}</label>
+                <span data-value-label class="text-xs font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-md px-2 py-1">${valueLabel}</span>
+            </div>
+            <input type="range" min="${bounds.min}" max="${bounds.max}" step="${step}" value="${startValue}" name="${feature}" ${disabled}
+                class="w-full accent-indigo-600 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60">
+            <div class="flex items-center justify-between text-xs text-gray-500">
+                <span>${minLabel}</span>
+                <span>${maxLabel}</span>
+            </div>
         </div>`;
     }).join('');
-    el.featuresContainer.querySelectorAll('input[name]').forEach(input => input.addEventListener('input', scheduleLivePrediction));
+
+    el.featuresContainer.querySelectorAll('input[type="range"][name]').forEach(input => {
+        const card = input.closest('[data-feature-card]');
+        const valueEl = card ? card.querySelector('[data-value-label]') : null;
+        const step = Number.parseFloat(input.step || '0.01');
+        const syncValue = () => {
+            if (valueEl) valueEl.textContent = formatFeatureValue(input.value, step);
+        };
+        input.addEventListener('input', () => {
+            syncValue();
+            scheduleLivePrediction();
+        });
+        syncValue();
+    });
+
     hide(el.predictionSection, false);
+}
+
+function getTrainingSource() {
+    return document.querySelector('input[name="trainingSource"]:checked')?.value || 'raw';
 }
 
 function renderTestPredictions(rows) {
@@ -376,6 +491,39 @@ function renderTestAnalysis(predictions = [], summary = {}, comparison = {}) {
     renderClassChart(comparison);
 }
 
+async function downloadProcessedCsv() {
+    if (!state.processedCsvDownloadUrl) {
+        showSitePopup('Processed CSV download is not available yet. Train first.', 'error');
+        return;
+    }
+    if (!el.apiKeyInput.value) {
+        showSitePopup('Please enter your API key to download the processed CSV.', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetchWithHelpfulError(state.processedCsvDownloadUrl, {
+            method: 'GET',
+            headers: { 'X-API-Key': el.apiKeyInput.value }
+        }, 60000);
+        if (!response.ok) {
+            throw new Error(`Download failed (${response.status})`);
+        }
+
+        const blob = await response.blob();
+        const downloadUrl = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = downloadUrl;
+        link.download = 'processed_uploaded.csv';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(downloadUrl);
+    } catch (error) {
+        showSitePopup(`Download error: ${error.message}`, 'error');
+    }
+}
+
 function predictionPayload(requireComplete) {
     const payload = Object.fromEntries(new FormData(el.predictForm));
     for (const f of state.features) {
@@ -388,13 +536,21 @@ function predictionPayload(requireComplete) {
             if (requireComplete) throw new Error(`Invalid numeric value for ${f}`);
             return null;
         }
+        const parsed = Number.parseFloat(v);
+        const bounds = resolveFeatureBounds(f);
+        if (bounds && (parsed < bounds.min || parsed > bounds.max)) {
+            if (requireComplete) {
+                throw new Error(`${f} must be between ${bounds.min} and ${bounds.max}`);
+            }
+            return null;
+        }
     }
     return payload;
 }
 
 async function predict(payload, showError) {
     if (!el.apiKeyInput.value) {
-        if (showError) alert('Please enter your API key in the training form above');
+        if (showError) showSitePopup('Please enter your API key in the training form above', 'error');
         return;
     }
 
@@ -412,7 +568,7 @@ async function predict(payload, showError) {
         el.predictionValue.textContent = result.prediction;
         hide(el.predictionResult, false);
     } catch (error) {
-        if (req === state.requestId && showError) alert(`Prediction error: ${error.message}`);
+        if (req === state.requestId && showError) showSitePopup(`Prediction error: ${error.message}`, 'error');
     } finally {
         if (req === state.requestId) hide(el.predictionStatus, true);
     }
@@ -427,15 +583,26 @@ function scheduleLivePrediction() {
 }
 
 function fillRandomValues() {
-    if (!state.features.length || !Object.keys(state.dataStats).length) {
-        alert('No feature ranges found. Train the model first.');
+    if (!state.features.length) {
+        showSitePopup('No feature ranges found. Train the model first.', 'error');
         return;
     }
     state.features.forEach(feature => {
-        const input = document.querySelector(`input[name="${feature}"]`);
-        const s = state.dataStats[feature];
-        if (!input || !s) return;
-        input.value = (Math.random() * (s.max - s.min) + s.min).toFixed(4);
+        const input = document.querySelector(`input[type="range"][name="${feature}"]`);
+        const bounds = resolveFeatureBounds(feature);
+        if (!input || !bounds) return;
+
+        const step = Number.parseFloat(input.step || '0.01');
+        if (bounds.min === bounds.max) {
+            input.value = String(bounds.min);
+        } else {
+            const randomValue = Math.random() * (bounds.max - bounds.min) + bounds.min;
+            input.value = formatFeatureValue(randomValue, step);
+        }
+
+        const card = input.closest('[data-feature-card]');
+        const valueEl = card ? card.querySelector('[data-value-label]') : null;
+        if (valueEl) valueEl.textContent = formatFeatureValue(input.value, step);
     });
     scheduleLivePrediction();
 }
@@ -448,14 +615,31 @@ el.fileInput.addEventListener('change', async event => {
     previewData(headers, data);
 });
 
+document.querySelectorAll('input[name="trainingSource"]').forEach(input => {
+    input.addEventListener('change', () => {
+        const usePreprocessed = getTrainingSource() === 'preprocessed';
+        el.fileInput.required = !usePreprocessed;
+    });
+});
+
 el.trainForm.addEventListener('submit', async event => {
     event.preventDefault();
-    if (!el.fileInput.files[0]) return alert('Please select a file');
-    if (!el.apiKeyInput.value) return alert('Please enter your API key');
+    const usePreprocessed = getTrainingSource() === 'preprocessed';
+    if (!usePreprocessed && !el.fileInput.files[0]) {
+        showSitePopup('Please select a file', 'error');
+        return;
+    }
+    if (!el.apiKeyInput.value) {
+        showSitePopup('Please enter your API key', 'error');
+        return;
+    }
 
     const formData = new FormData();
-    formData.append('file', el.fileInput.files[0]);
+    if (el.fileInput.files[0]) {
+        formData.append('file', el.fileInput.files[0]);
+    }
     formData.append('target', el.targetInput.value);
+    formData.append('use_preprocessed_data', usePreprocessed ? 'true' : 'false');
     setTrainLoading(true);
 
     try {
@@ -472,12 +656,22 @@ el.trainForm.addEventListener('submit', async event => {
         hide(el.resultsSection, false);
         setImgCacheBust();
 
+        state.processedCsvDownloadUrl = result.processed_csv_download_url || null;
+        hide(el.processedCsvNotice, !state.processedCsvDownloadUrl);
+        showSitePopup(
+            result.training_source === 'preprocessed'
+                ? 'Trained using the preprocessed CSV.'
+                : 'Trained using the uploaded CSV.',
+            'success'
+        );
+
         state.features = result.features;
+        state.featureBounds = result.feature_bounds || {};
         state.dataStats = buildFeatureStats(state.csvData, state.features);
         renderFeatureInputs(state.features);
         setTimeout(() => el.resultsSection.scrollIntoView({ behavior: 'smooth' }), 300);
     } catch (error) {
-        alert(`Error: ${error.message}`);
+        showSitePopup(`Error: ${error.message}`, 'error');
     } finally {
         setTrainLoading(false);
     }
@@ -488,13 +682,18 @@ el.sampleDataBtn.addEventListener('click', event => {
     fillRandomValues();
 });
 
+el.downloadProcessedCsvBtn.addEventListener('click', event => {
+    event.preventDefault();
+    downloadProcessedCsv();
+});
+
 el.predictForm.addEventListener('submit', async event => {
     event.preventDefault();
     try {
         const payload = predictionPayload(true);
         await predict(payload, true);
     } catch (error) {
-        alert(error.message);
+        showSitePopup(error.message, 'error');
     }
 });
 </script>
